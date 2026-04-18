@@ -1,0 +1,80 @@
+name: Build Windows Desktop
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed for creating releases
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '^1.23'
+          cache-dependency-path: desktop/go.sum
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Build frontend (desktop mode)
+        run: npx vite build --mode=desktop
+
+      - name: Install Go build tooling
+        run: |
+          go install github.com/GeertJohan/go.rice/rice@v1.0.3
+          go install github.com/tc-hib/go-winres@latest
+
+      - name: Build Windows binary
+        working-directory: desktop
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: |
+          set -euo pipefail
+          VER=$(node -p "require('../package.json').version")
+          SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          echo "VER=$VER"      >> $GITHUB_ENV
+          echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_ENV
+
+          mkdir -p editor
+          cp -r ../dist/* editor/
+
+          printf "package main\nconst Version = \"%s-%s\"\n" "$VER" "$SHORT_SHA" > version.go
+          sed "s/{{.Version}}/$VER/g" winres/winres_template.json > winres/winres.json
+
+          "$(go env GOPATH)/bin/rice"      embed-go
+          "$(go env GOPATH)/bin/go-winres" make --product-version=$VER
+
+          mkdir -p bin/windows
+          go build -trimpath -ldflags="-s -w" -o bin/windows/maputnik.exe .
+
+      - name: Upload artifact (90-day retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: maputnik-windows
+          path: desktop/bin/windows/maputnik.exe
+
+      - name: Create/update rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly-main
+          name: "Nightly build — ${{ env.VER }} (${{ env.SHORT_SHA }})"
+          body: |
+            Automated Windows build from `main` @ ${{ github.sha }}
+            Upstream version: ${{ env.VER }}
+          files: desktop/bin/windows/maputnik.exe
+          prerelease: true
+          make_latest: true

@@ -1,0 +1,29 @@
+name: Sync fork with upstream
+
+on:
+  schedule:
+    - cron: '17 4 * * *'   # daily at 04:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Sync main from upstream
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/maplibre/maputnik.git
+          git fetch upstream main
+          # fast-forward only; if the fork has diverged, this fails on purpose
+          git merge --ff-only upstream/main
+          git push origin main
